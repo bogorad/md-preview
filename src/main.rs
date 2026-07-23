@@ -6,11 +6,9 @@
 mod session;
 
 use notify::{Event, RecursiveMode, Watcher};
-use pulldown_cmark::{html, CowStr, Event as MdEvent, Options, Parser, Tag, TagEnd};
 use session::DocumentSession;
 use std::collections::HashMap;
 use std::fs;
-use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -20,6 +18,13 @@ use tao::event::{Event as TaoEvent, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy};
 use tao::window::{Theme, Window, WindowBuilder};
 use wry::{WebView, WebViewBuilder};
+
+#[cfg(test)]
+use md_preview::render::md_to_html;
+use md_preview::render::{
+    build_enhancer_bootstrap, enhance_flags_for, md_to_html_with_base, EnhanceFlags, HLJS_DARK,
+    HLJS_EXTRA_LANGS, HLJS_JS, HLJS_LIGHT, PREVIEW_CSS, PREVIEW_DARK_CSS, PREVIEW_ENHANCE_JS,
+};
 
 const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.ico");
 const DEFAULT_W: f64 = 900.0;
@@ -101,18 +106,6 @@ impl ThemeChoice {
             ThemeChoice::Light => Some(Theme::Light),
             ThemeChoice::Dark => Some(Theme::Dark),
         }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-struct EnhanceFlags {
-    math: bool,
-    mermaid: bool,
-}
-
-impl EnhanceFlags {
-    fn any(self) -> bool {
-        self.math || self.mermaid
     }
 }
 
@@ -372,337 +365,7 @@ fn centered_geom(event_loop: &EventLoop<UserEvent>) -> WindowGeom {
     }
 }
 
-#[cfg(test)]
-fn md_to_html(md: &str) -> String {
-    md_to_html_with_base(md, None)
-}
-
-fn md_to_html_with_base(md: &str, base_dir: Option<&Path>) -> String {
-    let opts = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_HEADING_ATTRIBUTES
-        | Options::ENABLE_MATH
-        | Options::ENABLE_GFM;
-    let parser = Parser::new_ext(md, opts);
-    let events = embed_local_images(
-        add_mark_highlights(add_heading_ids(parser.collect())),
-        base_dir,
-    );
-    let mut html_out = String::new();
-    html::push_html(&mut html_out, events.into_iter());
-    html_out
-}
-
-fn embed_local_images<'a>(events: Vec<MdEvent<'a>>, base_dir: Option<&Path>) -> Vec<MdEvent<'a>> {
-    let Some(base_dir) = base_dir else {
-        return events;
-    };
-
-    events
-        .into_iter()
-        .map(|event| match event {
-            MdEvent::Start(Tag::Image {
-                link_type,
-                dest_url,
-                title,
-                id,
-            }) => {
-                let embedded = local_image_data_url(base_dir, dest_url.as_ref());
-                MdEvent::Start(Tag::Image {
-                    link_type,
-                    dest_url: embedded.map(CowStr::from).unwrap_or(dest_url),
-                    title,
-                    id,
-                })
-            }
-            _ => event,
-        })
-        .collect()
-}
-
-fn local_image_data_url(base_dir: &Path, url: &str) -> Option<String> {
-    let image_path = resolve_local_relative_image_path(base_dir, url)?;
-    let mime = image_mime_type(&image_path)?;
-    let bytes = fs::read(image_path).ok()?;
-    Some(format!("data:{mime};base64,{}", base64_encode(&bytes)))
-}
-
-fn resolve_local_relative_image_path(base_dir: &Path, url: &str) -> Option<PathBuf> {
-    let path_part = url.split(['#', '?']).next()?.trim();
-    if !is_local_relative_url(path_part) {
-        return None;
-    }
-
-    let mut candidate = base_dir.to_path_buf();
-    for segment in path_part.split('/') {
-        if segment.is_empty() || segment == "." {
-            continue;
-        }
-        let decoded = percent_decode_path_segment(segment)?;
-        let segment_path = Path::new(&decoded);
-        if segment_path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-        {
-            return None;
-        }
-        candidate.push(segment_path);
-    }
-
-    if candidate == base_dir {
-        return None;
-    }
-    Some(candidate)
-}
-
-fn is_local_relative_url(url: &str) -> bool {
-    !url.is_empty()
-        && !url.starts_with('#')
-        && !url.starts_with('/')
-        && !url.starts_with('\\')
-        && !url.starts_with("//")
-        && !url.contains(':')
-}
-
-fn percent_decode_path_segment(segment: &str) -> Option<String> {
-    let bytes = segment.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            let hi = bytes.get(i + 1).and_then(|b| hex_value(*b))?;
-            let lo = bytes.get(i + 2).and_then(|b| hex_value(*b))?;
-            out.push((hi << 4) | lo);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).ok()
-}
-
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
-
-fn image_mime_type(path: &Path) -> Option<&'static str> {
-    match path
-        .extension()?
-        .to_string_lossy()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "png" => Some("image/png"),
-        "jpg" | "jpeg" => Some("image/jpeg"),
-        "gif" => Some("image/gif"),
-        "webp" => Some("image/webp"),
-        "svg" => Some("image/svg+xml"),
-        "bmp" => Some("image/bmp"),
-        "ico" => Some("image/x-icon"),
-        "avif" => Some("image/avif"),
-        _ => None,
-    }
-}
-
-fn base64_encode(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(((bytes.len() + 2) / 3) * 4);
-    let mut chunks = bytes.chunks_exact(3);
-    for chunk in &mut chunks {
-        let n = ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | chunk[2] as u32;
-        out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
-        out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
-        out.push(TABLE[((n >> 6) & 0x3f) as usize] as char);
-        out.push(TABLE[(n & 0x3f) as usize] as char);
-    }
-
-    match chunks.remainder() {
-        [a] => {
-            let n = (*a as u32) << 16;
-            out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
-            out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
-            out.push('=');
-            out.push('=');
-        }
-        [a, b] => {
-            let n = ((*a as u32) << 16) | ((*b as u32) << 8);
-            out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
-            out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
-            out.push(TABLE[((n >> 6) & 0x3f) as usize] as char);
-            out.push('=');
-        }
-        _ => {}
-    }
-
-    out
-}
-
-fn add_mark_highlights<'a>(events: Vec<MdEvent<'a>>) -> Vec<MdEvent<'a>> {
-    let mut out = Vec::with_capacity(events.len());
-
-    for event in events {
-        match event {
-            MdEvent::Text(text) => {
-                if text.contains("==") {
-                    push_mark_highlight_events(text.as_ref(), &mut out);
-                } else {
-                    out.push(MdEvent::Text(text));
-                }
-            }
-            _ => out.push(event),
-        }
-    }
-
-    out
-}
-
-fn push_mark_highlight_events<'a>(text: &str, out: &mut Vec<MdEvent<'a>>) {
-    let mut rest = text;
-
-    while let Some(open) = rest.find("==") {
-        let after_open = open + 2;
-        let Some(close_rel) = rest[after_open..].find("==") else {
-            break;
-        };
-        let close = after_open + close_rel;
-        let body = &rest[after_open..close];
-        if body.trim().is_empty() {
-            break;
-        }
-
-        if open > 0 {
-            out.push(MdEvent::Text(CowStr::Boxed(
-                rest[..open].to_string().into_boxed_str(),
-            )));
-        }
-        out.push(MdEvent::Html(CowStr::Borrowed(
-            r#"<mark class="mdp-mark">"#,
-        )));
-        out.push(MdEvent::Text(CowStr::Boxed(
-            body.to_string().into_boxed_str(),
-        )));
-        out.push(MdEvent::Html(CowStr::Borrowed("</mark>")));
-        rest = &rest[close + 2..];
-    }
-
-    if !rest.is_empty() {
-        out.push(MdEvent::Text(CowStr::Boxed(
-            rest.to_string().into_boxed_str(),
-        )));
-    }
-}
-
-fn add_heading_ids<'a>(mut events: Vec<MdEvent<'a>>) -> Vec<MdEvent<'a>> {
-    let mut seen: HashMap<String, usize> = HashMap::new();
-
-    for i in 0..events.len() {
-        let generate_id = match &events[i] {
-            MdEvent::Start(Tag::Heading { id: Some(id), .. }) => {
-                register_heading_id(id.as_ref(), &mut seen);
-                false
-            }
-            MdEvent::Start(Tag::Heading { id: None, .. }) => true,
-            _ => false,
-        };
-
-        if !generate_id {
-            continue;
-        }
-
-        let text = collect_heading_text(&events, i);
-        let base = heading_slug(&text);
-        let id_value = unique_heading_id(base, &mut seen);
-        if let MdEvent::Start(Tag::Heading { id, .. }) = &mut events[i] {
-            *id = Some(CowStr::Boxed(id_value.into_boxed_str()));
-        }
-    }
-
-    events
-}
-
-fn collect_heading_text(events: &[MdEvent<'_>], start: usize) -> String {
-    let mut text = String::new();
-
-    for event in events.iter().skip(start + 1) {
-        match event {
-            MdEvent::End(TagEnd::Heading(_)) => break,
-            MdEvent::Text(value)
-            | MdEvent::Code(value)
-            | MdEvent::InlineMath(value)
-            | MdEvent::DisplayMath(value) => text.push_str(value.as_ref()),
-            MdEvent::SoftBreak | MdEvent::HardBreak => text.push(' '),
-            _ => {}
-        }
-    }
-
-    text
-}
-
-fn heading_slug(text: &str) -> String {
-    let mut slug = String::new();
-    let mut last_dash = false;
-
-    for c in text.trim().chars().flat_map(char::to_lowercase) {
-        if c.is_alphanumeric() || c == '_' || c == '-' {
-            slug.push(c);
-            last_dash = false;
-        } else if c.is_whitespace() && !slug.is_empty() && !last_dash {
-            slug.push('-');
-            last_dash = true;
-        }
-    }
-
-    while slug.ends_with('-') {
-        slug.pop();
-    }
-
-    if slug.is_empty() {
-        "section".to_string()
-    } else {
-        slug
-    }
-}
-
-fn register_heading_id(id: &str, seen: &mut HashMap<String, usize>) {
-    if !id.is_empty() {
-        *seen.entry(id.to_string()).or_insert(0) += 1;
-    }
-}
-
-fn unique_heading_id(base: String, seen: &mut HashMap<String, usize>) -> String {
-    let count = seen.entry(base.clone()).or_insert(0);
-    let id = if *count == 0 {
-        base
-    } else {
-        format!("{base}-{count}")
-    };
-    *count += 1;
-    id
-}
-
-// Embedded highlight.js + themes (offline)
-const HLJS_JS: &str = include_str!("../assets/hljs/highlight.min.js");
-const HLJS_LIGHT: &str = include_str!("../assets/hljs/github.min.css");
-const HLJS_DARK: &str = include_str!("../assets/hljs/github-dark.min.css");
-// Extra language pack(s) not in the `common` bundle. Each file
-// ends with `hljs.registerLanguage(...)` and only works if evaluated
-// in the same scope as the main bundle — we concat them into hljs-src.
-const HLJS_EXTRA_LANGS: &str = concat!(
-    // Delphi / Pascal (aliases: dpr, dfm, pas, pascal) — user requested
-    include_str!("../assets/hljs/delphi.min.js"),
-);
-const PREVIEW_ENHANCE_JS: &str = include_str!("../assets/enhance/preview-enhance.js");
 const UPDATE_CHECK_JS: &str = include_str!("../assets/enhance/update-check.js");
-const KATEX_JS: &str = include_str!("../assets/katex/katex.min.js");
-const KATEX_CSS: &str = include_str!("../assets/katex/katex.inline.css");
-const MERMAID_JS: &str = include_str!("../assets/mermaid/mermaid.min.js");
 const MAX_RECENT_FILES: usize = 8;
 
 fn html_escape_ta(s: &str) -> String {
@@ -839,132 +502,6 @@ fn file_url_for_path_dir(dir: &Path) -> String {
     format!("file://{}", percent_encode_file_path(&path))
 }
 
-fn starts_mermaid_fence(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    let rest = trimmed
-        .strip_prefix("```")
-        .or_else(|| trimmed.strip_prefix("~~~"));
-    let Some(info) = rest else {
-        return false;
-    };
-    let info = info.trim_start();
-    info == "mermaid"
-        || info
-            .strip_prefix("mermaid")
-            .and_then(|s| s.chars().next())
-            .map(|c| c.is_whitespace() || c == '{')
-            .unwrap_or(false)
-}
-
-fn has_unescaped_at(s: &str, index: usize, needle: &str) -> bool {
-    if !s[index..].starts_with(needle) {
-        return false;
-    }
-    let mut backslashes = 0;
-    for b in s[..index].bytes().rev() {
-        if b == b'\\' {
-            backslashes += 1;
-        } else {
-            break;
-        }
-    }
-    backslashes % 2 == 0
-}
-
-fn has_unescaped_pair(s: &str, open: &str, close: &str) -> bool {
-    let mut pos = 0;
-    while let Some(rel) = s[pos..].find(open) {
-        let start = pos + rel;
-        if !has_unescaped_at(s, start, open) {
-            pos = start + open.len();
-            continue;
-        }
-        let body_start = start + open.len();
-        let mut search = body_start;
-        while let Some(close_rel) = s[search..].find(close) {
-            let close_at = search + close_rel;
-            if has_unescaped_at(s, close_at, close) {
-                return true;
-            }
-            search = close_at + close.len();
-        }
-        pos = body_start;
-    }
-    false
-}
-
-fn has_inline_dollar_math(s: &str) -> bool {
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'$' || !has_unescaped_at(s, i, "$") {
-            i += 1;
-            continue;
-        }
-        if bytes.get(i + 1).copied() == Some(b'$')
-            || bytes
-                .get(i + 1)
-                .map(|b| b.is_ascii_whitespace())
-                .unwrap_or(true)
-        {
-            i += 1;
-            continue;
-        }
-        let mut j = i + 1;
-        while j < bytes.len() {
-            if bytes[j] == b'$'
-                && has_unescaped_at(s, j, "$")
-                && bytes
-                    .get(j.wrapping_sub(1))
-                    .map(|b| !b.is_ascii_whitespace())
-                    .unwrap_or(false)
-            {
-                return true;
-            }
-            j += 1;
-        }
-        i += 1;
-    }
-    false
-}
-
-fn enhance_flags_for(md: &str) -> EnhanceFlags {
-    EnhanceFlags {
-        math: has_unescaped_pair(md, "$$", "$$")
-            || has_unescaped_pair(md, "\\[", "\\]")
-            || has_unescaped_pair(md, "\\(", "\\)")
-            || has_inline_dollar_math(md),
-        mermaid: md.lines().any(starts_mermaid_fence),
-    }
-}
-
-fn build_enhancer_bootstrap(flags: EnhanceFlags, loaded: EnhanceFlags) -> Vec<String> {
-    if !flags.any() {
-        return Vec::new();
-    }
-
-    let mut scripts = Vec::new();
-    if flags.math && !loaded.math {
-        let mut js = String::from("(function(){\nif(!window.katex){\n");
-        js.push_str(KATEX_JS);
-        js.push_str("\n;try{window.katex=katex;}catch(e){}\n}\n");
-        js.push_str("if(window.__setKatexCss)window.__setKatexCss('");
-        js.push_str(&escape_js(KATEX_CSS));
-        js.push_str("');\n})();");
-        scripts.push(js);
-    }
-    if flags.mermaid && !loaded.mermaid {
-        // Mermaid's standalone bundle expects global script scope. Keep it
-        // out of the function wrapper that is safe for KaTeX/highlight.js.
-        let mut js = String::with_capacity(MERMAID_JS.len() + 80);
-        js.push_str(MERMAID_JS);
-        js.push_str("\n;try{window.mermaid=mermaid;}catch(e){}\n");
-        scripts.push(js);
-    }
-    scripts.push("if(window.__enhancePreview)window.__enhancePreview();".to_string());
-    scripts
-}
-
 fn empty_preview_html(s: &Strings, recent_files: &[PathBuf]) -> String {
     let empty_class = if recent_files.is_empty() {
         "empty"
@@ -1032,80 +569,13 @@ fn build_page(
   apply(mq); mq.addEventListener('change', apply);
 }})();
 </script>
+<style>{preview_css}</style>
 <style>
-:root {{ color-scheme: light dark; --chrome-top: 10px; }}
+:root {{ --chrome-top: 10px; }}
 /* Reserve scrollbar space permanently so the fixed toolbar doesn't shift
    between modes (one with scrollbar, one without). */
 html {{ overflow-y: scroll; scrollbar-gutter: stable; }}
-body {{
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  margin: 0; padding: 0;
-  line-height: 1.6; font-size: 15px;
-  color: #1a1a1a; background: #fff;
-}}
 body.has-tabs {{ --chrome-top: 50px; }}
-#app {{ max-width: 820px; margin: 0 auto; padding: 24px; }}
-#preview h1,#preview h2,#preview h3,#preview h4 {{ margin-top: 1.4em; }}
-#preview h1 {{ border-bottom: 1px solid #e1e4e8; padding-bottom: .3em; }}
-#preview h2 {{ border-bottom: 1px solid #e1e4e8; padding-bottom: .2em; }}
-#preview code {{ background: #f0f0f0; padding: 2px 6px; border-radius: 4px; font-size: 90%; }}
-#preview pre {{ background: #f6f8fa; padding: 16px; border-radius: 8px; overflow-x: auto; }}
-#preview pre code {{ background: none; padding: 0; font-size: 14px; }}
-#preview blockquote {{ border-left: 4px solid #ddd; margin: 0; padding: 0 1em; color: #666; }}
-#preview .markdown-alert-note,
-#preview .markdown-alert-tip,
-#preview .markdown-alert-important,
-#preview .markdown-alert-warning,
-#preview .markdown-alert-caution {{
-  margin: 1em 0;
-  padding: 0.75em 1em;
-  border-radius: 6px;
-  color: inherit;
-}}
-#preview .markdown-alert-title {{
-  display: flex;
-  align-items: center;
-  gap: .35em;
-  margin: 0 0 .45em;
-  font-weight: 600;
-  line-height: 1.25;
-}}
-#preview .markdown-alert-title + p {{ margin-top: 0; }}
-#preview .markdown-alert-note {{ border-color: #0969da; background: #ddf4ff; }}
-#preview .markdown-alert-tip {{ border-color: #1a7f37; background: #dafbe1; }}
-#preview .markdown-alert-important {{ border-color: #8250df; background: #fbefff; }}
-#preview .markdown-alert-warning {{ border-color: #9a6700; background: #fff8c5; }}
-#preview .markdown-alert-caution {{ border-color: #cf222e; background: #ffebe9; }}
-#preview .markdown-alert-note .markdown-alert-title {{ color: #0969da; }}
-#preview .markdown-alert-tip .markdown-alert-title {{ color: #1a7f37; }}
-#preview .markdown-alert-important .markdown-alert-title {{ color: #8250df; }}
-#preview .markdown-alert-warning .markdown-alert-title {{ color: #9a6700; }}
-#preview .markdown-alert-caution .markdown-alert-title {{ color: #cf222e; }}
-#preview .mdp-mark {{ border-radius: 3px; padding: 0 0.12em; background: #fff2a8; color: inherit; }}
-#preview mark.search-hit {{ border-radius: 3px; padding: 0 0.12em; background: #fff2a8; color: inherit; }}
-#preview mark.search-hit.current {{ background: #ffcc4d; color: #1a1a1a; }}
-#preview table {{ border-collapse: collapse; width: 100%; }}
-#preview .mdp-table-wrap {{
-  width: min(calc(100vw - 64px), 1280px);
-  margin: 1em 0 1em 50%;
-  transform: translateX(-50%);
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-}}
-#preview .mdp-table-wrap table {{ width: max-content; min-width: 100%; }}
-#preview table th, #preview table td {{ border: 1px solid #ddd; padding: 8px 12px; text-align: left; }}
-#preview table th {{ background: #f6f8fa; font-weight: 600; color: #1a1a1a; white-space: nowrap; }}
-#preview table td {{ min-width: 64px; max-width: 360px; vertical-align: top; overflow-wrap: break-word; }}
-#preview img {{ max-width: 100%; }}
-#preview .katex-display {{ overflow-x: auto; overflow-y: hidden; padding: 0.15em 0; }}
-#preview .mdp-mermaid {{ margin: 1.2em 0; overflow-x: auto; text-align: center; }}
-#preview .mdp-mermaid svg {{ max-width: 100%; height: auto; }}
-#preview .mdp-mermaid-error, #preview .mdp-math-error {{ color: #b42318; }}
-#preview hr {{ border: none; border-top: 1px solid #e1e4e8; margin: 2em 0; }}
-#preview a {{ color: #0969da; text-decoration: none; }}
-#preview a:hover {{ text-decoration: underline; }}
-#preview ul, #preview ol {{ padding-left: 2em; }}
-#preview input[type="checkbox"] {{ margin-right: 6px; }}
 	.empty {{ display: flex; flex-direction: column; align-items: center; justify-content: center;
 	  min-height: 60vh; color: #999; font-size: 18px; gap: 12px; text-align: center; }}
 	.empty.has-recent {{
@@ -1223,30 +693,7 @@ body.empty .toolbar.has-update button:not(.update-btn) {{ display: none !importa
 	}}
 	.findbar button:hover {{ background: #f0f0f0; color: #111; }}
 	@media (prefers-color-scheme: dark) {{
-	  body {{ color: #d4d4d4; background: #1e1e1e; }}
-	  #preview a {{ color: #6cb6ff; }}
-	  #preview h1, #preview h2 {{ border-color: #333; }}
-	  #preview pre {{ background: #2d2d2d !important; }}
-	  #preview code:not(pre code) {{ background: #2d2d2d; }}
-	  #preview blockquote {{ border-color: #444; color: #aaa; }}
-	  #preview .markdown-alert-note,
-	  #preview .markdown-alert-tip,
-	  #preview .markdown-alert-important,
-	  #preview .markdown-alert-warning,
-	  #preview .markdown-alert-caution {{ background: #161b22; color: #d4d4d4; }}
-	  #preview .markdown-alert-note {{ border-color: #2f81f7; }}
-	  #preview .markdown-alert-tip {{ border-color: #3fb950; }}
-	  #preview .markdown-alert-important {{ border-color: #a371f7; }}
-	  #preview .markdown-alert-warning {{ border-color: #d29922; }}
-	  #preview .markdown-alert-caution {{ border-color: #f85149; }}
-	  #preview .markdown-alert-note .markdown-alert-title {{ color: #2f81f7; }}
-	  #preview .markdown-alert-tip .markdown-alert-title {{ color: #3fb950; }}
-	  #preview .markdown-alert-important .markdown-alert-title {{ color: #a371f7; }}
-	  #preview .markdown-alert-warning .markdown-alert-title {{ color: #d29922; }}
-	  #preview .markdown-alert-caution .markdown-alert-title {{ color: #f85149; }}
-	  #preview table th {{ background: #2d2d2d; color: #f0f0f0; }}
-	  #preview table td, #preview table th {{ border-color: #444; }}
-	  #preview hr {{ border-color: #333; }}
+{preview_dark_css}
 	  .toolbar button {{
 	    background: rgba(40,40,40,0.8);
     border-color: rgba(255,255,255,0.1);
@@ -1848,6 +1295,8 @@ window.__mdPreviewInstallUpdateCheck({{
 </body></html>"#,
         css_light = HLJS_LIGHT,
         css_dark = HLJS_DARK,
+        preview_css = PREVIEW_CSS,
+        preview_dark_css = PREVIEW_DARK_CSS,
         base_tag = base_tag,
         preview_html = preview_html,
         raw_md_escaped = html_escape_ta(raw_md),

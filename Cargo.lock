@@ -1674,6 +1674,10 @@ checksum = "2532096657941c2fea9c289d370a250971c689d4f143798ff67113ec042024a5"
 name = "md-preview"
 version = "1.3.0"
 dependencies = [
+ "cairo-rs",
+ "gio",
+ "glib",
+ "gtk",
  "image",
  "notify",
  "objc2",
@@ -1687,6 +1691,7 @@ dependencies = [
  "sys-locale",
  "tao",
  "url",
+ "webkit2gtk",
  "winreg",
  "winresource",
  "wry",

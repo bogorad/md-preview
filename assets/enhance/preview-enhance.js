@@ -7,6 +7,18 @@
     return (window.requestIdleCallback || function(cb) { return setTimeout(cb, 0); })(fn);
   }
 
+  function idlePromise(fn) {
+    return new Promise(function(resolve, reject) {
+      idle(function() {
+        try {
+          Promise.resolve(fn()).then(resolve, reject);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  }
+
   function setFlags(needsMath, needsMermaid) {
     flags = { math: !!needsMath, mermaid: !!needsMermaid };
     window.__mdPreviewFeatureFlags = flags;
@@ -165,7 +177,7 @@
   }
 
   function renderMermaid(container, source) {
-    if (!window.mermaid || !window.mermaid.render) return;
+    if (!window.mermaid || !window.mermaid.render) return Promise.resolve();
     var id = 'mdp-mermaid-' + (++mermaidSeq);
     try {
       window.mermaid.initialize({
@@ -173,7 +185,7 @@
         securityLevel: 'strict',
         theme: currentMermaidTheme()
       });
-      Promise.resolve(window.mermaid.render(id, source)).then(function(result) {
+      return Promise.resolve(window.mermaid.render(id, source)).then(function(result) {
         container.innerHTML = result.svg || result;
       }).catch(function(err) {
         container.className = 'mdp-mermaid-error';
@@ -184,12 +196,14 @@
       container.className = 'mdp-mermaid-error';
       container.textContent = source;
       container.title = err && err.message ? err.message : 'Mermaid render error';
+      return Promise.resolve();
     }
   }
 
   function enhanceMermaid(root) {
-    if (!flags.mermaid || !window.mermaid) return;
+    if (!flags.mermaid || !window.mermaid) return Promise.resolve();
     var nodes = root.querySelectorAll('pre > code.language-mermaid, pre > code.mermaid');
+    var renders = [];
     Array.prototype.forEach.call(nodes, function(code) {
       var pre = code.parentElement;
       if (!pre || pre.dataset.mdpMermaid === '1') return;
@@ -199,8 +213,9 @@
       container.className = 'mdp-mermaid';
       container.textContent = source;
       pre.parentNode.replaceChild(container, pre);
-      renderMermaid(container, source);
+      renders.push(renderMermaid(container, source));
     });
+    return Promise.all(renders);
   }
 
   function enhanceTables(root) {
@@ -411,14 +426,16 @@
 
   window.__enhancePreview = function() {
     var root = document.getElementById('preview');
-    if (!root) return;
+    if (!root) return Promise.resolve();
     bindAnchorNavigation();
-    idle(function() {
+    var enhancement = idlePromise(function() {
       enhanceTables(root);
       enhanceAlerts(root);
       enhanceMarks(root);
       enhanceMath(root);
-      enhanceMermaid(root);
+      return enhanceMermaid(root);
     });
+    window.__mdPreviewEnhancement = enhancement;
+    return enhancement;
   };
 })();
