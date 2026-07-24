@@ -14,8 +14,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 use webkit2gtk::{
-    NetworkProxyMode, NetworkProxySettings, PermissionRequestExt, SnapshotOptions, SnapshotRegion,
-    WebContext, WebContextExt, WebView, WebViewExt, WebsiteDataManagerExt,
+    HardwareAccelerationPolicy, NetworkProxyMode, NetworkProxySettings, PermissionRequestExt,
+    Settings, SettingsExt, SnapshotOptions, SnapshotRegion, WebContext, WebContextExt, WebView,
+    WebViewExt, WebsiteDataManagerExt,
 };
 
 const MIN_DIMENSION: u32 = 64;
@@ -482,7 +483,16 @@ fn render_page(page: &str, request: &RenderRequest) -> Result<ReadySnapshot, App
 
     let window = gtk::OffscreenWindow::new();
     window.set_default_size(request.pixel_width as i32, request.pixel_height as i32);
-    let webview = WebView::with_context(&context);
+    let webview = if request.software_rendering {
+        let settings = Settings::new();
+        settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Never);
+        WebView::builder()
+            .web_context(&context)
+            .settings(&settings)
+            .build()
+    } else {
+        WebView::with_context(&context)
+    };
     webview.set_size_request(request.pixel_width as i32, request.pixel_height as i32);
     webview.set_zoom_level(request.scale);
     webview.connect_permission_request(|_, permission| {
@@ -610,6 +620,8 @@ fn render_page(page: &str, request: &RenderRequest) -> Result<ReadySnapshot, App
 }
 
 fn enable_software_rendering() {
+    env::set_var("GDK_GL", "disable");
+    env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
     env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
 }
