@@ -306,7 +306,9 @@ pub fn build_snapshot_page(rendered: &RenderedMarkdown, options: SnapshotPageOpt
     }
     page.push_str("html{color-scheme:");
     page.push_str(options.theme.as_str());
-    page.push_str(";overflow:hidden}body{min-height:100vh}#app{box-sizing:border-box}</style>");
+    page.push_str(
+        ";overflow:hidden}body{min-height:100vh}#app{box-sizing:border-box;max-width:none;width:100%}</style>",
+    );
     page.push_str("<style>");
     page.push_str(highlight_css);
     page.push_str("</style>");
@@ -1300,5 +1302,7 @@ mod tests {
         assert!(page.contains("securityLevel: 'strict'"));
         assert!(page.contains("trust: false"));
         assert!(page.contains(PREVIEW_DARK_CSS.trim()));
+        assert!(PREVIEW_CSS.contains("#app { max-width: 820px;"));
+        assert!(page.contains("#app{box-sizing:border-box;max-width:none;width:100%}"));
     }
 }
