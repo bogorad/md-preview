@@ -49,7 +49,7 @@ Required options:
   --scale <number>     Pixel scale (0.5..4.0)
   --theme <theme>      light or dark
   --timeout-ms <ms>    Render timeout (100..120000)
-  --software-rendering Disable WebKit hardware acceleration
+  --software-rendering Accepted for compatibility; rendering is software-only
 
 Other options:
   -h, --help           Print this help
@@ -103,7 +103,6 @@ struct RenderRequest {
     scale: f64,
     theme: PreviewTheme,
     timeout_ms: u64,
-    software_rendering: bool,
     pixel_width: u32,
     pixel_height: u32,
 }
@@ -113,7 +112,6 @@ struct PreparedRender {
     source: PathBuf,
     source_bytes: usize,
     page: String,
-    output: AtomicOutput,
 }
 
 struct AtomicOutput {
@@ -302,10 +300,14 @@ fn run() -> Result<(), AppError> {
 }
 
 fn render(request: RenderRequest) -> Result<(), AppError> {
+    let timeout_ms = request.timeout_ms;
+    let _watchdog = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(timeout_ms));
+        eprintln!("md-preview-render: timed out waiting for render completion");
+        std::process::exit(EXIT_RENDER_TIMEOUT);
+    });
     let prepared = prepare_render(request)?;
-    if prepared.request.software_rendering {
-        enable_software_rendering();
-    }
+    enable_software_rendering();
     gtk::init().map_err(|error| {
         AppError::new(
             EXIT_RENDER_FAILURE,
@@ -343,6 +345,12 @@ fn render(request: RenderRequest) -> Result<(), AppError> {
         ));
     }
 
+    let output = AtomicOutput::prepare(&prepared.request.output)?;
+    if output.final_path == prepared.source {
+        return Err(AppError::invalid(
+            "--output must not replace the source file",
+        ));
+    }
     let request = &prepared.request;
     let metadata = RenderMetadata {
         schema_version: 1,
@@ -367,7 +375,7 @@ fn render(request: RenderRequest) -> Result<(), AppError> {
         )
     })?;
     metadata_json.push(b'\n');
-    let output = prepared.output.commit(&snapshot.surface)?;
+    let output = output.commit(&snapshot.surface)?;
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     stdout
@@ -444,25 +452,16 @@ fn prepare_render(request: RenderRequest) -> Result<PreparedRender, AppError> {
         &rendered,
         SnapshotPageOptions {
             page: request.page,
-            width: request.width,
             height: request.height,
-            scale: request.scale,
             theme: request.theme,
             max_pages: MAX_RENDER_PAGES,
         },
     );
-    let output = AtomicOutput::prepare(&request.output)?;
-    if output.final_path == source {
-        return Err(AppError::invalid(
-            "--output must not replace the source file",
-        ));
-    }
     Ok(PreparedRender {
         request,
         source,
         source_bytes: markdown.len(),
         page,
-        output,
     })
 }
 
@@ -483,16 +482,12 @@ fn render_page(page: &str, request: &RenderRequest) -> Result<ReadySnapshot, App
 
     let window = gtk::OffscreenWindow::new();
     window.set_default_size(request.pixel_width as i32, request.pixel_height as i32);
-    let webview = if request.software_rendering {
-        let settings = Settings::new();
-        settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Never);
-        WebView::builder()
-            .web_context(&context)
-            .settings(&settings)
-            .build()
-    } else {
-        WebView::with_context(&context)
-    };
+    let settings = Settings::new();
+    settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Never);
+    let webview = WebView::builder()
+        .web_context(&context)
+        .settings(&settings)
+        .build();
     webview.set_size_request(request.pixel_width as i32, request.pixel_height as i32);
     webview.set_zoom_level(request.scale);
     webview.connect_permission_request(|_, permission| {
@@ -594,20 +589,6 @@ fn render_page(page: &str, request: &RenderRequest) -> Result<ReadySnapshot, App
 
     window.show_all();
     webview.load_html(page, Some("about:blank"));
-    glib::timeout_add_local_once(Duration::from_millis(request.timeout_ms), {
-        let main_loop = main_loop.clone();
-        let result = Rc::clone(&result);
-        move || {
-            finish_render(
-                &result,
-                &main_loop,
-                Err(AppError::new(
-                    EXIT_RENDER_TIMEOUT,
-                    "timed out waiting for render completion",
-                )),
-            );
-        }
-    });
     main_loop.run();
 
     let completed = result.borrow_mut().take().unwrap_or_else(|| {
@@ -705,7 +686,6 @@ fn parse_args(args: Vec<String>) -> Result<Command, AppError> {
     let mut scale = None;
     let mut theme = None;
     let mut timeout_ms = None;
-    let mut software_rendering = false;
     let mut index = 0;
     while index < args.len() {
         let option = &args[index];
@@ -715,10 +695,6 @@ fn parse_args(args: Vec<String>) -> Result<Command, AppError> {
             )));
         }
         if option == "--software-rendering" {
-            if software_rendering {
-                return Err(AppError::invalid(format!("duplicate option: {option}")));
-            }
-            software_rendering = true;
             index += 1;
             continue;
         }
@@ -789,7 +765,6 @@ fn parse_args(args: Vec<String>) -> Result<Command, AppError> {
         scale,
         theme: required(theme, "--theme")?,
         timeout_ms,
-        software_rendering,
         pixel_width,
         pixel_height,
     }))
@@ -876,17 +851,13 @@ mod tests {
         assert_eq!(request.pixel_width, 1920);
         assert_eq!(request.pixel_height, 1080);
         assert_eq!(request.theme, PreviewTheme::Dark);
-        assert!(!request.software_rendering);
     }
 
     #[test]
     fn parses_software_rendering_flag() {
         let mut args = complete_args();
         args.push("--software-rendering".to_string());
-        let Command::Render(request) = parse_args(args).expect("valid request") else {
-            panic!("expected render request");
-        };
-        assert!(request.software_rendering);
+        assert!(matches!(parse_args(args), Ok(Command::Render(_))));
     }
 
     #[test]
@@ -944,7 +915,6 @@ mod tests {
             scale: 1.0,
             theme: PreviewTheme::Light,
             timeout_ms: 20_000,
-            software_rendering: false,
             pixel_width: 640,
             pixel_height: 360,
         };

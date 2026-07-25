@@ -124,69 +124,22 @@ body { color: #d4d4d4; background: #1e1e1e; }
 const SNAPSHOT_READY_JS: &str = r#"
 (function() {
   var config = window.__mdPreviewRenderConfig;
-  var state = window.__mdPreviewRenderState = { status: 'pending' };
-
-  function twoFrames() {
-    return new Promise(function(resolve) {
-      requestAnimationFrame(function() { requestAnimationFrame(resolve); });
+  var body = document.body;
+  var root = document.documentElement;
+  var totalHeight = Math.max(root.scrollHeight, body.scrollHeight);
+  var totalPages = Math.max(1, Math.ceil(totalHeight / config.height));
+  if (totalPages > config.maxPages) {
+    document.title = 'md-preview-failed:document exceeds page limit';
+  } else if (config.page >= totalPages) {
+    document.title = 'md-preview-page-out-of-range:' + totalPages;
+  } else {
+    body.style.minHeight = (totalPages * config.height) + 'px';
+    window.scrollTo(0, config.page * config.height);
+    requestAnimationFrame(function() {
+      document.title = 'md-preview-ready:' + totalPages + ':' + totalHeight + ':' +
+        window.innerWidth + ':' + window.innerHeight;
     });
   }
-
-  function decodeImages() {
-    return Promise.all(Array.prototype.map.call(document.images, function(image) {
-      if (typeof image.decode === 'function') return image.decode();
-      if (image.complete && image.naturalWidth > 0) return Promise.resolve();
-      return new Promise(function(resolve, reject) {
-        image.addEventListener('load', resolve, { once: true });
-        image.addEventListener('error', function() { reject(new Error('image decode failed')); }, { once: true });
-      });
-    }));
-  }
-
-  Promise.resolve()
-    .then(function() {
-      if (window.hljs && window.hljs.highlightAll) window.hljs.highlightAll();
-      if (window.__enhancePreview) return window.__enhancePreview();
-    })
-    .then(function() { return document.fonts && document.fonts.ready; })
-    .then(decodeImages)
-    .then(twoFrames)
-    .then(function() {
-      var root = document.documentElement;
-      var body = document.body;
-      var totalHeight = Math.max(root.scrollHeight, body.scrollHeight);
-      var totalPages = Math.max(1, Math.ceil(totalHeight / config.height));
-      if (totalPages > config.maxPages) {
-        throw new Error('document exceeds page limit');
-      }
-      if (config.page >= totalPages) {
-        state.status = 'failed';
-        state.reason = 'page-out-of-range';
-        state.totalPages = totalPages;
-        document.title = 'md-preview-page-out-of-range:' + totalPages;
-        return;
-      }
-      body.style.minHeight = (totalPages * config.height) + 'px';
-      window.scrollTo(0, config.page * config.height);
-      return twoFrames().then(function() {
-        var expectedOffset = config.page * config.height;
-        if (Math.abs(window.scrollY - expectedOffset) > 0.5) {
-          throw new Error('failed to reach exact page offset');
-        }
-        state.status = 'ready';
-        state.totalPages = totalPages;
-        state.totalHeight = totalHeight;
-        state.viewportWidth = window.innerWidth;
-        state.viewportHeight = window.innerHeight;
-        document.title = 'md-preview-ready:' + totalPages + ':' + totalHeight + ':' +
-          window.innerWidth + ':' + window.innerHeight;
-      });
-    })
-    .catch(function(error) {
-      state.status = 'failed';
-      state.reason = String(error && error.message || error);
-      document.title = 'md-preview-failed:' + state.reason.slice(0, 160);
-    });
 })();
 "#;
 
@@ -220,15 +173,12 @@ impl PreviewTheme {
 #[derive(Debug)]
 pub struct RenderedMarkdown {
     pub html: String,
-    pub flags: EnhanceFlags,
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct SnapshotPageOptions {
     pub page: u32,
-    pub width: u32,
     pub height: u32,
-    pub scale: f64,
     pub theme: PreviewTheme,
     pub max_pages: u32,
 }
@@ -278,23 +228,11 @@ pub fn render_snapshot_markdown(
     let events = embed_snapshot_images(events, base_dir)?;
     Ok(RenderedMarkdown {
         html: events_to_html(events),
-        flags: enhance_flags_for(md),
     })
 }
 
 pub fn build_snapshot_page(rendered: &RenderedMarkdown, options: SnapshotPageOptions) -> String {
-    let highlight_css = match options.theme {
-        PreviewTheme::Light => HLJS_LIGHT,
-        PreviewTheme::Dark => HLJS_DARK,
-    };
-
-    let mut page = String::with_capacity(
-        rendered.html.len()
-            + HLJS_JS.len()
-            + HLJS_EXTRA_LANGS.len()
-            + PREVIEW_ENHANCE_JS.len()
-            + 32_768,
-    );
+    let mut page = String::with_capacity(rendered.html.len() + PREVIEW_CSS.len() + 8192);
     page.push_str("<!doctype html><html data-theme=\"");
     page.push_str(options.theme.as_str());
     page.push_str("\"><head><meta charset=\"utf-8\">");
@@ -309,43 +247,13 @@ pub fn build_snapshot_page(rendered: &RenderedMarkdown, options: SnapshotPageOpt
     page.push_str(
         ";overflow:hidden}body{min-height:100vh}#app{box-sizing:border-box;max-width:none;width:100%}</style>",
     );
-    page.push_str("<style>");
-    page.push_str(highlight_css);
-    page.push_str("</style>");
-    if rendered.flags.math {
-        page.push_str("<style id=\"katex-css\">");
-        page.push_str(KATEX_CSS);
-        page.push_str("</style>");
-    }
     page.push_str("</head><body><main id=\"app\"><article id=\"preview\">");
     page.push_str(&rendered.html);
     page.push_str("</article></main><script>");
-    page.push_str(HLJS_JS);
-    page.push('\n');
-    page.push_str(HLJS_EXTRA_LANGS);
-    page.push_str("\n;try{window.hljs=hljs;}catch(error){}\n");
-    if rendered.flags.math {
-        page.push_str(KATEX_JS);
-        page.push_str("\n;try{window.katex=katex;}catch(error){}\n");
-    }
-    if rendered.flags.mermaid {
-        page.push_str(MERMAID_JS);
-        page.push_str("\n;try{window.mermaid=mermaid;}catch(error){}\n");
-    }
-    page.push_str("window.__mdPreviewFeatureFlags={math:");
-    page.push_str(if rendered.flags.math { "true" } else { "false" });
-    page.push_str(",mermaid:");
-    page.push_str(if rendered.flags.mermaid {
-        "true"
-    } else {
-        "false"
-    });
-    page.push_str("};\n");
-    page.push_str(PREVIEW_ENHANCE_JS);
-    page.push_str("\nwindow.__mdPreviewRenderConfig=");
+    page.push_str("window.__mdPreviewRenderConfig=");
     page.push_str(&format!(
-        "{{page:{},width:{},height:{},scale:{},maxPages:{}}}",
-        options.page, options.width, options.height, options.scale, options.max_pages
+        "{{page:{},height:{},maxPages:{}}}",
+        options.page, options.height, options.max_pages
     ));
     page.push_str(";\n");
     page.push_str(SNAPSHOT_READY_JS);
@@ -1275,32 +1183,24 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_page_contains_shared_assets_and_readiness_protocol() {
+    fn snapshot_page_uses_the_fast_readiness_protocol() {
         let rendered = RenderedMarkdown {
             html: "<h1>hello</h1>".to_string(),
-            flags: EnhanceFlags {
-                math: true,
-                mermaid: true,
-            },
         };
         let page = build_snapshot_page(
             &rendered,
             SnapshotPageOptions {
                 page: 0,
-                width: 960,
                 height: 720,
-                scale: 1.0,
                 theme: PreviewTheme::Dark,
                 max_pages: MAX_RENDER_PAGES,
             },
         );
         assert!(page.contains("Content-Security-Policy"));
-        assert!(page.contains("window.__mdPreviewRenderState"));
-        assert!(page.contains("document.fonts"));
-        assert!(page.contains("decodeImages"));
         assert!(page.contains("md-preview-ready:"));
-        assert!(page.contains("securityLevel: 'strict'"));
-        assert!(page.contains("trust: false"));
+        assert!(!page.contains("document.fonts"));
+        assert!(!page.contains("decodeImages"));
+        assert!(!page.contains("window.hljs"));
         assert!(page.contains(PREVIEW_DARK_CSS.trim()));
         assert!(PREVIEW_CSS.contains("#app { max-width: 820px;"));
         assert!(page.contains("#app{box-sizing:border-box;max-width:none;width:100%}"));
