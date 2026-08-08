@@ -21,7 +21,24 @@ rustPlatform.buildRustPackage {
   pname = "md-preview";
   version = (lib.importTOML ../Cargo.toml).package.version;
 
-  src = ../.;
+  # Only what the crate actually compiles from. Using the whole tree would mean
+  # that a README, a workflow or a docs commit changes the source hash and
+  # forces every consumer into a full rebuild of the Rust dependency graph.
+  #
+  # The list is exhaustive: build.rs, everything include_str!/include_bytes!'d
+  # out of assets/, and Cargo.toml, which env!("CARGO_PKG_VERSION") reads at
+  # compile time. The tests are inline in src/main.rs and touch no repository
+  # files at runtime.
+  src = lib.fileset.toSource {
+    root = ../.;
+    fileset = lib.fileset.unions [
+      ../Cargo.toml
+      ../Cargo.lock
+      ../build.rs
+      ../src
+      ../assets
+    ];
+  };
 
   # Every dependency resolves to crates.io, so the committed lock file is
   # enough and no vendor hash has to be tracked alongside it.
