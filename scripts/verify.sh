@@ -101,7 +101,7 @@ PY
 fi
 
 if [ -f docs/index.html ] && [ -f README.md ] && [ -f README_zh.md ]; then
-  echo "[agent-verify] v1.3 product story"
+  echo "[agent-verify] current product story"
   python3 - <<'PY'
 from pathlib import Path
 import tomllib
@@ -123,12 +123,16 @@ for marker in ("Desktop tabs", "Session restore", "Finder workflow"):
 for marker in ("桌面标签", "会话恢复", "Finder 工作流"):
     if marker not in readme_zh:
         raise SystemExit(f"README_zh.md is missing v1.2 product marker: {marker}")
-for marker in ("New in v1.3", "Reliable autosave"):
+for marker in ("New in v1.4", "Local document links", "Counts, zoom, continuity", "Reliable autosave"):
     if marker not in site:
-        raise SystemExit(f"website is missing v1.3 product marker: {marker}")
-if "Reliable autosave" not in readme or "可靠自动保存" not in readme_zh:
-    raise SystemExit("README files must describe v1.3 reliable autosave")
-if "What's New" not in src or "rely on automatic save" not in src:
+        raise SystemExit(f"website is missing current product marker: {marker}")
+for marker in ("Local document links", "Live statistics", "Content zoom", "Scroll continuity", "Reliable autosave"):
+    if marker not in readme:
+        raise SystemExit(f"README.md is missing current product marker: {marker}")
+for marker in ("本地文档链接", "实时统计", "正文缩放", "滚动连续", "可靠自动保存"):
+    if marker not in readme_zh:
+        raise SystemExit(f"README_zh.md is missing current product marker: {marker}")
+if "What's New" not in src or "Follow local document links" not in src:
     raise SystemExit("macOS About must keep the current product positioning and What's New entry")
 PY
   ran=1
@@ -180,6 +184,22 @@ if [ -f scripts/verify-desktop-search.mjs ]; then
     ran=1
   else
     echo "[agent-verify] skip desktop search: playwright unavailable"
+  fi
+fi
+
+if [ -f scripts/verify-desktop-reading-tools.mjs ]; then
+  BUNDLED_NODE="/Users/longjiewu/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
+  BUNDLED_NODE_MODULES="/Users/longjiewu/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules"
+  if [ -x "$BUNDLED_NODE" ] && [ -d "$BUNDLED_NODE_MODULES" ]; then
+    echo "[agent-verify] desktop reading tools"
+    NODE_PATH="$BUNDLED_NODE_MODULES" "$BUNDLED_NODE" scripts/verify-desktop-reading-tools.mjs
+    ran=1
+  elif command -v node >/dev/null 2>&1 && node -e "import('playwright')" >/dev/null 2>&1; then
+    echo "[agent-verify] desktop reading tools"
+    node scripts/verify-desktop-reading-tools.mjs
+    ran=1
+  else
+    echo "[agent-verify] skip desktop reading tools: playwright unavailable"
   fi
 fi
 

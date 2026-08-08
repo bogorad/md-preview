@@ -9,7 +9,7 @@
 [![App Store](https://img.shields.io/badge/App%20Store-Local%20Markdown%20Preview-blue?logo=appstore)](https://apps.apple.com/cn/app/local-markdown-preview/id6779451523)
 [![Binary size](https://img.shields.io/badge/binary-~5MB-green)](https://github.com/vorojar/md-preview/releases)
 
-> 多份 Markdown，一个轻量窗口。直接新建、预览、编辑并自动保存，不必启动一整个 IDE。
+> 多份 Markdown，一个轻量窗口。沿本地文档链接跳转、查看统计、缩放正文并自动保存编辑，不必启动一整个 IDE。
 
 MD Preview 是用 **Rust** 和系统 **WebView** 写的本地优先 Markdown 预览与快速编辑工具，桌面端覆盖 macOS、Windows、Linux，手机端提供 iOS 和 Android 原生外壳，方便从文件管理器、微信、企业微信和系统分享面板打开 Markdown。它不打包 Chromium，不依赖 Electron，渲染资源全部离线内置。桌面端可以把多份本地文档放进同一组标签，重启后回到上次活动文档；macOS 上还能从 Finder 新建 Markdown 并立即开始编辑。
 
@@ -22,7 +22,9 @@ AI 编程工具现在会生成大量 Markdown：`README.md`、`plan.md`、任务
 - **打开快**：原生二进制、系统 WebView，不带一份浏览器运行时。
 - **本地渲染**：Markdown、代码高亮、数学公式、Mermaid 图表都在本机完成。
 - **文档放在一起**：在一个标签窗口里打开多份 Markdown 和文本，下次启动继续上次会话。
+- **沿文档目录跳转**：相对或绝对的本地 Markdown / 文本链接直接打开或激活标签，不会离开当前预览。
 - **编辑少绕路**：从标签栏或 Finder 新建 Markdown 后立即输入，停顿片刻就自动保存。
+- **按自己的节奏阅读**：预览与源码保留阅读进度，实时显示字与字符数，并且只缩放文档正文。
 - **跟随外部编辑**：用 Vim、VS Code、Cursor、Zed 或任何编辑器保存文件，预览自动刷新。
 - **阅读不打扰**：工具栏只在 hover 时出现，空白首页提供打开文件和最近文件，文档始终是主角。
 - **覆盖真实文档**：代码块、表格、任务列表、公式、图表、图片、链接、打印都能离线工作。
@@ -78,7 +80,7 @@ md-preview README.md plan.md task.md
 md-preview
 ```
 
-MD Preview 支持通过拖拽、打开对话框、最近文件或命令行打开 `.md` / `.txt` 文件。桌面端会用标签承载文档；重复打开同一路径时只激活已有标签。使用标签栏 `+` 或 `Cmd/Ctrl+N` 可在当前文档旁新建 Markdown，并立即进入源码编辑。重启后恢复标签顺序和活动文档，后台文档正文仍留在磁盘，点击时才加载。相对路径图片会按 Markdown 文件所在目录解析，本地文档目录可以自然渲染。
+MD Preview 支持通过拖拽、打开对话框、最近文件或命令行打开 `.md` / `.txt` 文件。桌面端会用标签承载文档；重复打开同一路径时只激活已有标签。使用标签栏 `+` 或 `Cmd/Ctrl+N` 可在当前文档旁新建 Markdown，并立即进入源码编辑。重启后恢复标签顺序和活动文档，后台文档正文仍留在磁盘，点击时才加载。相对路径图片和受支持的本地文档链接都会按当前 Markdown 所在目录解析，本地文档目录可以自然渲染和跳转。
 
 如果标签对应的文件被移动或删除，标签不会静默消失。点击后可以重新定位文件，或者关闭标签。
 
@@ -99,6 +101,11 @@ iPhone 和 iPad 上，Local Markdown Preview 可以从“文件”和 iOS 分享
 | 缺失文件 | 文件移动或删除后保留缺失标签，提供重新定位和关闭操作。 |
 | Finder 工作流 | macOS 上从 Finder 新建 Markdown，并立即在 MD Preview 里编辑。 |
 | 可靠自动保存 | 源码输入停顿片刻即保存；预览、切换标签、关闭标签/窗口或退出前强制写盘，保存失败时保留标签和编辑内容。 |
+| 本地文档链接 | 相对或绝对的现有 Markdown / 文本链接会打开或激活标签；无效本地目标不会替换当前预览。 |
+| 头部元信息 | 文档开头的 YAML metadata 保持元信息排版，不再被挤成标题。 |
+| 实时统计 | 标签栏显示非空白字符数与总字符数，源码编辑时同步更新。 |
+| 正文缩放 | 在 70% 到 200% 之间缩放渲染正文或源码，不改变标签栏和工具栏。 |
+| 滚动连续 | 预览和源码高度不同时，切换仍按归一化阅读进度恢复位置。 |
 | 启动首页 | 空白启动时显示打开文件和本机最近文件，没加载文档也有明确入口。 |
 | 手机端打开 | iOS 支持从“文件”和分享面板打开 Markdown；Android 支持从文件管理器、微信、企业微信和系统分享面板打开 Markdown。 |
 | 拖拽打开 | 把 Markdown 文件拖进窗口即可打开。 |
@@ -129,6 +136,9 @@ iPhone 和 iPad 上，Local Markdown Preview 可以从“文件”和 iOS 分享
 | `Cmd/Ctrl + S` | 源码编辑模式下保存 |
 | `Cmd/Ctrl + P` | 打印预览 |
 | `Cmd/Ctrl + W` | 关闭当前标签；没有文档标签时关闭窗口 |
+| `Cmd/Ctrl +` | 放大文档正文 |
+| `Cmd/Ctrl -` | 缩小文档正文 |
+| `Cmd/Ctrl 0` | 重置文档正文缩放 |
 | `Esc` | 退出源码编辑模式，并在需要时保存 |
 
 ## Markdown 支持
@@ -142,6 +152,8 @@ MD Preview 先用 `pulldown-cmark` 完成基础 Markdown 解析，再只在需�
 - KaTeX 离线数学公式渲染，并保护公式不被 Markdown 强调语法破坏
 - Mermaid 离线渲染 ```` ```mermaid ```` fenced code block
 - 通过按文件设置 `<base>` 支持相对路径图片
+- 支持跳转到相对或绝对路径的本地 Markdown / 文本文档
+- 保持 `---` 或 `...` 包围的 YAML front matter 清晰可读
 - 打印样式自动移除应用工具栏和源码编辑区
 
 普通 Markdown 走轻路径：文档先可见，highlight.js、KaTeX、Mermaid 这类较重的增强逻辑延迟到首屏之后，或只在文档真正需要时加载。

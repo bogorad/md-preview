@@ -1,4 +1,67 @@
-# 当前任务：新建 Markdown、可靠自动保存与 v1.3.0 发布
+# 已完成任务：文档导航、阅读工具与 v1.4.0 发布
+
+## 目标
+
+- 点击相对或绝对本地 Markdown / Text 链接时，在 MD Preview 中打开或激活对应标签，不让 WebView 跳到空白页。
+- 正确识别文件开头的 YAML front matter，保持元信息可读且不误解析成 Setext 标题。
+- 编辑与预览切换时按文档滚动进度恢复位置。
+- 用极简状态显示字数与字符数，并在编辑时实时更新。
+- 增加只作用于文档正文的缩放，支持 `Cmd/Ctrl +`、`Cmd/Ctrl -`、`Cmd/Ctrl 0` 并持久化。
+- 完成自动化测试、真实 macOS UI、签名、公证、Gatekeeper、Release assets 与应用内更新闭环后发布 v1.4.0。
+
+## 非目标
+
+- 不实现 Obsidian 式所见即所得、富文本编辑或渲染节点到源码光标的双向映射。
+- 不改变网页链接、邮件链接、同页标题锚点和相对图片的现有行为。
+- 不把缩放扩展到标签栏、工具栏或原生窗口控件。
+- 不提交 AGENTS.md、App Store Review、推广资料及其他既有未提交内容。
+- Homebrew 官方 Cask 继续等待自荐项目 notability 门槛，不阻塞 v1.4.0。
+
+## 验收场景
+
+- [x] `folder/another.md`、`../INDEX.md`、绝对路径、含空格和中文的文件链接打开或激活标签；缺失文件、目录和不支持扩展名不离开当前预览。
+- [x] `http`、`https`、`mailto` 仍交给系统，同页 `#anchor` 仍在当前文档内定位。
+- [x] 文件开头 `--- ... ---` / `--- ... ...` 元信息不会挤成标题；普通水平线和 Setext 标题不受影响。
+- [x] 在预览和编辑的顶部、25%、50%、底部往返切换，滚动进度误差保持在可接受范围。
+- [x] 字数统计显示非空白字符数与总字符数，中文、英文、标点、空格、换行和编辑更新均有确定结果。
+- [x] 文档缩放支持增大、减小、复位和上下限，重开应用后恢复；标签栏和工具栏尺寸不变。
+- [x] `cargo test`、`cargo check`、`./scripts/verify.sh`、三平台 CI 与真实 macOS UI 全部通过。
+- [x] macOS DMG 及内部 app/appex 完成 Developer ID 签名、公证、staple、Gatekeeper 与 Sparkle appcast 验证；Release 正文来自 CHANGELOG。
+
+## 最小验证命令
+
+```bash
+cargo test
+cargo check
+./scripts/verify.sh
+./bundle.sh
+codesign --verify --deep --strict --verbose=2 "target/MD Preview.app"
+```
+
+## 风险与假设
+
+- 本地文档链接必须经过 `url::Url` 转换并复用 `DocumentSession`，不能把任意 `file://` 内容交给 WebView。
+- front matter 只在文档首行是精确分隔符且存在闭合分隔符时启用，避免改变普通 Markdown 语义。
+- 字数定义为非空白 Unicode 字符数，字符数包含空格和换行；不增加分词、段落数或选区统计。
+- 正文缩放范围固定且持久化失败不能阻塞文档打开。
+
+## 当前验证记录
+
+- TDD：front matter 与本地文件 URL 的 Rust 测试先红后绿；桌面统计、缩放和滚动 Playwright 验收先失败后通过。
+- Rust：`cargo fmt --check`、`cargo check`、37 个 `cargo test` 全部通过。
+- 桌面脚本：锚点与本地链接 IPC、预览搜索、统计/缩放/滚动三套 Playwright 验收全部通过。
+- 真实 macOS UI：YAML 元信息、表格、代码高亮、KaTeX、Mermaid 均正确；编辑时统计由 `2,545 字 · 3,124 字符` 实时变为 `2,547 字 · 3,127 字符`；切回预览保持文档底部进度；正文放大后标签栏和工具栏尺寸不变。
+- 完整验证：`./scripts/verify.sh` 通过，覆盖 Sparkle、Windows 自更新、iOS build、Android debug/release、移动渲染与 release readiness。
+- CI：独立 CI `30154652177` 与 Release workflow `30154653842` 全绿；macOS、Linux、Windows 和 publish-release 均成功。
+- Apple 公证：内层 app submission `d1f49222-23ed-4dd0-8036-bd2364f2574d`、外层 DMG submission `60561532-10bb-4d2f-87ab-7b1eb60a592a` 均为 `Accepted`，两层 staple 成功。
+- 正式资产：`v1.4.0` Release 已公开，含 Linux tar.gz、Windows exe、已签名公证的 macOS universal DMG 与 EdDSA 签名 `appcast.xml`；正文完整来自 `CHANGELOG.md`。
+- 安装验收：`/Applications/MD Preview.app` 为 `1.4.0`，签名主体为 Ningbo Huli Huli Network Technology Co., Ltd.，Team ID `BUR55497B4`；codesign、Gatekeeper、Finder extension entitlement 与 Sparkle appcast 验证通过。
+- 官网：GitHub Pages workflow `30154651918` 成功，结构化版本与 v1.4 功能文案已上线。
+- Issues：#29、#33、#38 已按原语言回复并按 completed 关闭；#19 Homebrew Cask 继续保持开放。
+
+---
+
+# 已完成任务：新建 Markdown、可靠自动保存与 v1.3.0 发布
 
 ## 目标
 

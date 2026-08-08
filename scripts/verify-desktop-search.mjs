@@ -37,6 +37,7 @@ await page.setContent(`<!doctype html>
   <body>
     <div class="tabbar">
       <div id="tabs"></div>
+      <div id="doc-stats"></div>
       <button id="tab-open"></button>
     </div>
     <div class="toolbar">
@@ -44,6 +45,12 @@ await page.setContent(`<!doctype html>
       <button id="btn-search"></button>
       <button id="btn-toggle"></button>
       <button id="btn-print"></button>
+      <div id="zoom-control">
+        <button id="btn-zoom"></button>
+        <button id="btn-zoom-out"></button>
+        <button id="btn-zoom-reset"></button>
+        <button id="btn-zoom-in"></button>
+      </div>
       <button id="btn-update" hidden></button>
     </div>
     <div class="findbar">

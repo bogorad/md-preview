@@ -22,8 +22,9 @@ use wry::{WebView, WebViewBuilder};
 #[cfg(test)]
 use md_preview::render::md_to_html;
 use md_preview::render::{
-    build_enhancer_bootstrap, enhance_flags_for, md_to_html_with_base, EnhanceFlags, HLJS_DARK,
-    HLJS_EXTRA_LANGS, HLJS_JS, HLJS_LIGHT, PREVIEW_CSS, PREVIEW_DARK_CSS, PREVIEW_ENHANCE_JS,
+    build_enhancer_bootstrap, enhance_flags_for, html_escape_text, md_to_html_with_base,
+    EnhanceFlags, HLJS_DARK, HLJS_EXTRA_LANGS, HLJS_JS, HLJS_LIGHT, PREVIEW_CSS, PREVIEW_DARK_CSS,
+    PREVIEW_ENHANCE_JS,
 };
 
 const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.ico");
@@ -155,7 +156,13 @@ struct Strings {
     btn_search: &'static str,
     btn_print: &'static str,
     btn_update: &'static str,
+    btn_zoom: &'static str,
+    btn_zoom_out: &'static str,
+    btn_zoom_reset: &'static str,
+    btn_zoom_in: &'static str,
     search_placeholder: &'static str,
+    stat_words: &'static str,
+    stat_chars: &'static str,
 }
 
 impl Strings {
@@ -178,7 +185,13 @@ impl Strings {
                 btn_search: "搜索 (Cmd/Ctrl+F)",
                 btn_print: "打印 (Cmd/Ctrl+P)",
                 btn_update: "Update",
+                btn_zoom: "正文缩放",
+                btn_zoom_out: "缩小正文 (Cmd/Ctrl+-)",
+                btn_zoom_reset: "重置正文缩放 (Cmd/Ctrl+0)",
+                btn_zoom_in: "放大正文 (Cmd/Ctrl++)",
                 search_placeholder: "搜索",
+                stat_words: "字",
+                stat_chars: "字符",
             },
             Lang::En => Strings {
                 drop_hint: "Drop a .md file here or press Cmd/Ctrl+O to open",
@@ -197,7 +210,13 @@ impl Strings {
                 btn_search: "Find (Cmd/Ctrl+F)",
                 btn_print: "Print (Cmd/Ctrl+P)",
                 btn_update: "Update",
+                btn_zoom: "Content zoom",
+                btn_zoom_out: "Zoom out (Cmd/Ctrl+-)",
+                btn_zoom_reset: "Reset zoom (Cmd/Ctrl+0)",
+                btn_zoom_in: "Zoom in (Cmd/Ctrl++)",
                 search_placeholder: "Find",
+                stat_words: "non-space",
+                stat_chars: "chars",
             },
         }
     }
@@ -376,10 +395,6 @@ fn html_escape_attr(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('"', "&quot;")
         .replace('<', "&lt;")
-}
-
-fn html_escape_text(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;")
 }
 
 fn recent_files_path() -> PathBuf {
@@ -571,7 +586,7 @@ fn build_page(
 </script>
 <style>{preview_css}</style>
 <style>
-:root {{ --chrome-top: 10px; }}
+:root {{ color-scheme: light dark; --chrome-top: 10px; --content-scale: 1; }}
 /* Reserve scrollbar space permanently so the fixed toolbar doesn't shift
    between modes (one with scrollbar, one without). */
 html {{ overflow-y: scroll; scrollbar-gutter: stable; }}
@@ -636,6 +651,11 @@ body.has-tabs {{ --chrome-top: 50px; }}
 	  color: #666; background: transparent; cursor: pointer; font: 20px/1 -apple-system, sans-serif;
 	}}
 	.tab-open:hover {{ color: #111; background: rgba(0,0,0,.06); }}
+	.doc-stats {{
+	  flex: 0 0 auto; align-self: center; padding: 0 6px;
+	  color: #8b8b8b; font-size: 11px; white-space: nowrap; user-select: none;
+	  font-variant-numeric: tabular-nums;
+	}}
 	.missing-file {{ min-height: 55vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; }}
 	.missing-file h2, .missing-file p {{ margin: 0; }}
 	.missing-file p {{ color: #777; }}
@@ -669,6 +689,20 @@ body.empty .toolbar.has-update button:not(.update-btn) {{ display: none !importa
 }}
 .toolbar button:hover {{ color: #000; background: rgba(255,255,255,1); }}
 .toolbar button[hidden] {{ display: none !important; }}
+	.zoom-control {{ position: relative; }}
+	.zoom-popover {{
+	  position: absolute; top: 40px; right: 0;
+	  display: none; align-items: center; gap: 2px; padding: 4px;
+	  border: 1px solid rgba(0,0,0,.1); border-radius: 8px;
+	  background: rgba(255,255,255,.96); box-shadow: 0 6px 20px rgba(0,0,0,.12);
+	  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+	}}
+	.zoom-control.open .zoom-popover {{ display: flex; }}
+	.toolbar .zoom-popover button {{ width: 30px; height: 30px; border: 0; background: transparent; }}
+	.toolbar .zoom-popover button:hover {{ background: rgba(0,0,0,.06); }}
+	.toolbar .zoom-popover .zoom-reset {{
+	  width: 52px; font-size: 11px; font-variant-numeric: tabular-nums;
+	}}
 	.toolbar .update-btn {{
 	  width: auto; min-width: 76px; padding: 0 11px; grid-auto-flow: column; gap: 5px;
 	  font-size: 13px; font-weight: 600; color: #0969da;
@@ -700,6 +734,8 @@ body.empty .toolbar.has-update button:not(.update-btn) {{ display: none !importa
     color: #bbb;
 	  }}
 	  .toolbar button:hover {{ color: #fff; background: rgba(55,55,55,1); }}
+	  .zoom-popover {{ background: rgba(34,34,34,.96); border-color: rgba(255,255,255,.12); }}
+	  .toolbar .zoom-popover button:hover {{ background: rgba(255,255,255,.1); }}
 	  .toolbar .update-btn {{ color: #6cb6ff; }}
 		  .empty-open {{ background: #242424; border-color: #444; color: #ddd; }}
 		  .empty-open:hover {{ background: #2d2d2d; color: #fff; }}
@@ -727,7 +763,7 @@ body.empty .toolbar.has-update button:not(.update-btn) {{ display: none !importa
   box-sizing: border-box;
   border: none; outline: none; resize: none;
   overflow: hidden;
-  font: 14px/1.6 "SF Mono","Menlo","Consolas",monospace;
+  font: calc(14px * var(--content-scale))/1.6 "SF Mono","Menlo","Consolas",monospace;
   background: transparent; color: inherit;
   padding: 0;
 }}
@@ -749,12 +785,20 @@ body.editing #btn-print {{ display: none; }}
   #preview .mdp-table-wrap {{ width: auto; margin: 1em 0; transform: none; overflow: visible; }}
 }}
 	</style></head><body class="{body_class}">
-	<div class="tabbar" id="tabbar"><div class="tabs" id="tabs"></div><button class="tab-open" id="tab-open" type="button" title="{btn_new}" aria-label="{btn_new}">+</button></div>
+	<div class="tabbar" id="tabbar"><div class="tabs" id="tabs"></div><div class="doc-stats" id="doc-stats" aria-live="polite"></div><button class="tab-open" id="tab-open" type="button" title="{btn_new}" aria-label="{btn_new}">+</button></div>
 	<div class="toolbar">
 	  <button id="btn-open" title="{btn_open}" aria-label="{btn_open}"></button>
 	  <button id="btn-search" title="{btn_search}" aria-label="{btn_search}"></button>
 	  <button id="btn-toggle" title="{btn_edit}" aria-label="{btn_edit}"></button>
 	  <button id="btn-print" title="{btn_print}" aria-label="{btn_print}"></button>
+	  <div class="zoom-control" id="zoom-control">
+	    <button id="btn-zoom" title="{btn_zoom}" aria-label="{btn_zoom}"></button>
+	    <div class="zoom-popover">
+	      <button id="btn-zoom-out" title="{btn_zoom_out}" aria-label="{btn_zoom_out}">−</button>
+	      <button id="btn-zoom-reset" class="zoom-reset" title="{btn_zoom_reset}" aria-label="{btn_zoom_reset}">100%</button>
+	      <button id="btn-zoom-in" title="{btn_zoom_in}" aria-label="{btn_zoom_in}">+</button>
+	    </div>
+	  </div>
 	  <button id="btn-update" class="update-btn" hidden title="{btn_update}" aria-label="{btn_update}"></button>
 	</div>
 	<div class="findbar" role="search">
@@ -775,6 +819,7 @@ body.editing #btn-print {{ display: none; }}
 	  var ICON_OPEN = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6A2 2 0 0 1 18.45 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg>';
 	  var ICON_SEARCH = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>';
 	  var ICON_PRINT = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>';
+	  var ICON_ZOOM = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M8 11h6"/><path d="M11 8v6"/></svg>';
 	  var ICON_UP = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>';
 	  var ICON_DOWN = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
 	  var ICON_CLOSE = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
@@ -784,6 +829,11 @@ body.editing #btn-print {{ display: none; }}
 	  var btnSearch = document.getElementById('btn-search');
 	  var btnToggle = document.getElementById('btn-toggle');
 	  var btnPrint = document.getElementById('btn-print');
+	  var btnZoom = document.getElementById('btn-zoom');
+	  var btnZoomOut = document.getElementById('btn-zoom-out');
+	  var btnZoomReset = document.getElementById('btn-zoom-reset');
+	  var btnZoomIn = document.getElementById('btn-zoom-in');
+	  var zoomControl = document.getElementById('zoom-control');
 	  var btnUpdate = document.getElementById('btn-update');
 	  var findInput = document.getElementById('find-input');
 	  var findState = document.getElementById('find-state');
@@ -791,6 +841,7 @@ body.editing #btn-print {{ display: none; }}
 	  var findNext = document.getElementById('find-next');
 	  var findClose = document.getElementById('find-close');
 	  var tabsEl = document.getElementById('tabs');
+	  var docStats = document.getElementById('doc-stats');
 	  var tabOpen = document.getElementById('tab-open');
 	  var ta = document.getElementById('editor');
 	  var dirty = false;
@@ -804,17 +855,79 @@ body.editing #btn-print {{ display: none; }}
 	  var findHits = [];
 	  var currentFindHit = -1;
 	  var lastFindQuery = '';
+	  var STAT_WORDS = '{stat_words_js}';
+	  var STAT_CHARS = '{stat_chars_js}';
+	  var ZOOM_STORAGE_KEY = 'md-preview-content-zoom-v1';
+	  var ZOOM_MIN = 70;
+	  var ZOOM_MAX = 200;
+	  var ZOOM_STEP = 10;
+	  var zoomPercent = 100;
 
 	  btnOpen.innerHTML = ICON_OPEN;
 	  btnSearch.innerHTML = ICON_SEARCH;
 	  btnToggle.innerHTML = ICON_EDIT;
 	  btnPrint.innerHTML = ICON_PRINT;
+	  btnZoom.innerHTML = ICON_ZOOM;
 	  btnUpdate.innerHTML = '<span class="update-mark">↻</span><span class="update-label">{btn_update}</span>';
 	  findPrev.innerHTML = ICON_UP;
 	  findNext.innerHTML = ICON_DOWN;
 	  findClose.innerHTML = ICON_CLOSE;
 
   function inEdit() {{ return document.body.classList.contains('editing'); }}
+  function textSegments(text) {{
+    if (typeof Intl !== 'undefined' && Intl.Segmenter) {{
+      var segmenter = new Intl.Segmenter(undefined, {{ granularity: 'grapheme' }});
+      return Array.from(segmenter.segment(text), function(item) {{ return item.segment; }});
+    }}
+    return Array.from(text);
+  }}
+  function updateDocumentStats(raw) {{
+    var segments = textSegments(String(raw || ''));
+    var words = segments.reduce(function(total, segment) {{
+      return total + (/^\s+$/u.test(segment) ? 0 : 1);
+    }}, 0);
+    var number = new Intl.NumberFormat().format;
+    docStats.textContent =
+      number(words) + ' ' + STAT_WORDS + ' · ' + number(segments.length) + ' ' + STAT_CHARS;
+  }}
+  function loadZoomPercent() {{
+    try {{
+      var stored = Number(localStorage.getItem(ZOOM_STORAGE_KEY));
+      if (Number.isFinite(stored) && stored >= ZOOM_MIN && stored <= ZOOM_MAX) return stored;
+    }} catch (_) {{}}
+    return 100;
+  }}
+  function applyZoom(percent, persist) {{
+    zoomPercent = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, percent));
+    document.documentElement.style.setProperty('--content-scale', String(zoomPercent / 100));
+    btnZoomReset.textContent = zoomPercent + '%';
+    if (persist) {{
+      try {{ localStorage.setItem(ZOOM_STORAGE_KEY, String(zoomPercent)); }} catch (_) {{}}
+    }}
+    if (inEdit()) autoResize();
+  }}
+  function changeZoom(delta) {{
+    applyZoom(zoomPercent + delta, true);
+  }}
+  function currentScrollProgress() {{
+    var root = document.documentElement;
+    var max = Math.max(root.scrollHeight - window.innerHeight, 0);
+    var y = window.scrollY || root.scrollTop || 0;
+    return max > 0 ? Math.min(1, Math.max(0, y / max)) : 0;
+  }}
+  function restoreScrollProgress(progress) {{
+    function restore() {{
+      var max = Math.max(document.documentElement.scrollHeight - window.innerHeight, 0);
+      window.scrollTo(window.scrollX || 0, max * progress);
+    }}
+    restore();
+    requestAnimationFrame(function() {{
+      restore();
+      requestAnimationFrame(restore);
+    }});
+  }}
+  applyZoom(loadZoomPercent(), false);
+  updateDocumentStats(ta.value);
   document.addEventListener('contextmenu', function(e) {{
     if (!inEdit() || e.target !== ta) e.preventDefault();
   }});
@@ -997,8 +1110,7 @@ body.editing #btn-print {{ display: none; }}
     window.scrollTo(x, y);
   }}
 	  function enterEdit() {{
-	    var x = window.scrollX || document.documentElement.scrollLeft || 0;
-	    var y = window.scrollY || document.documentElement.scrollTop || 0;
+	    var progress = currentScrollProgress();
 	    document.body.classList.add('editing');
 	    btnToggle.innerHTML = ICON_VIEW;
 	    btnToggle.title = L_VIEW;
@@ -1009,15 +1121,16 @@ body.editing #btn-print {{ display: none; }}
 	    }} catch (_) {{
 	      ta.focus();
 	    }}
-	    window.scrollTo(x, y);
-	    requestAnimationFrame(function() {{ window.scrollTo(x, y); }});
+	    restoreScrollProgress(progress);
 	  }}
   function leaveEdit() {{
+    var progress = currentScrollProgress();
     if (dirty) save();
     document.body.classList.remove('editing');
     btnToggle.innerHTML = ICON_EDIT;
     btnToggle.title = L_EDIT;
     btnToggle.setAttribute('aria-label', L_EDIT);
+    restoreScrollProgress(progress);
   }}
   window.__mdPreviewToggleEdit = function() {{
     if (inEdit()) leaveEdit(); else enterEdit();
@@ -1085,14 +1198,24 @@ body.editing #btn-print {{ display: none; }}
 	  btnToggle.addEventListener('click', function() {{
 	    window.__mdPreviewToggleEdit();
 	  }});
+	  btnZoom.addEventListener('click', function(e) {{
+	    e.stopPropagation();
+	    zoomControl.classList.toggle('open');
+	  }});
+	  btnZoomOut.addEventListener('click', function() {{ changeZoom(-ZOOM_STEP); }});
+	  btnZoomReset.addEventListener('click', function() {{ applyZoom(100, true); }});
+	  btnZoomIn.addEventListener('click', function() {{ changeZoom(ZOOM_STEP); }});
   btnPrint.addEventListener('click', function() {{
     if (inEdit()) leaveEdit();
     // Route through Rust: WKWebView ignores window.print(); wry's
     // WebView::print() calls the right native API on each platform.
     setTimeout(function(){{ window.ipc.postMessage('print'); }}, 0);
   }});
-	  ta.addEventListener('input', function() {{ setDirty(true); scheduleAutosave(); autoResize(); }});
+	  ta.addEventListener('input', function() {{ setDirty(true); scheduleAutosave(); autoResize(); updateDocumentStats(ta.value); }});
   window.addEventListener('resize', function() {{ if (inEdit()) autoResize(); }});
+  document.addEventListener('click', function(e) {{
+    if (!zoomControl.contains(e.target)) zoomControl.classList.remove('open');
+  }});
 
   document.addEventListener('keydown', function(e) {{
 	if ((e.metaKey || e.ctrlKey) && (e.key === 'w' || e.key === 'W')) {{
@@ -1107,6 +1230,21 @@ body.editing #btn-print {{ display: none; }}
 	  newFile();
 	  return;
 	}}
+    if ((e.metaKey || e.ctrlKey) && (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd')) {{
+      e.preventDefault();
+      changeZoom(ZOOM_STEP);
+      return;
+    }}
+    if ((e.metaKey || e.ctrlKey) && (e.key === '-' || e.code === 'NumpadSubtract')) {{
+      e.preventDefault();
+      changeZoom(-ZOOM_STEP);
+      return;
+    }}
+    if ((e.metaKey || e.ctrlKey) && (e.key === '0' || e.code === 'Numpad0')) {{
+      e.preventDefault();
+      applyZoom(100, true);
+      return;
+    }}
     if ((e.metaKey || e.ctrlKey) && (e.key === 'r' || e.key === 'R')) {{
       e.preventDefault();
       if (!inEdit()) window.ipc.postMessage('refresh');
@@ -1228,6 +1366,7 @@ body.editing #btn-print {{ display: none; }}
     if (!inEdit() || !dirty) {{
 	      autosavePaused = false;
 	      ta.value = rawMd;
+	      updateDocumentStats(rawMd);
       setDirty(false);
       if (inEdit()) autoResize();
     }}
@@ -1245,6 +1384,7 @@ body.editing #btn-print {{ display: none; }}
 	    window.__setBaseHref('');
 	    document.getElementById('preview').innerHTML = previewHtml;
 	    ta.value = '';
+	    updateDocumentStats('');
 	    setDirty(false);
 	    window.scrollTo(0, 0);
 	  }};
@@ -1261,6 +1401,7 @@ body.editing #btn-print {{ display: none; }}
 	    window.__setBaseHref('');
 	    document.getElementById('preview').innerHTML = previewHtml;
 	    ta.value = '';
+	    updateDocumentStats('');
 	    setDirty(false);
 	    window.scrollTo(0, 0);
 	  }};
@@ -1307,8 +1448,14 @@ window.__mdPreviewInstallUpdateCheck({{
         btn_preview = s.btn_preview,
         btn_print = s.btn_print,
         btn_update = s.btn_update,
+        btn_zoom = s.btn_zoom,
+        btn_zoom_out = s.btn_zoom_out,
+        btn_zoom_reset = s.btn_zoom_reset,
+        btn_zoom_in = s.btn_zoom_in,
         search_placeholder = s.search_placeholder,
         btn_update_js = escape_js(s.btn_update),
+        stat_words_js = escape_js(s.stat_words),
+        stat_chars_js = escape_js(s.stat_chars),
         app_version = update_current_version(),
         test_update_release_js = test_update_release_js(),
         native_updater = native_updater,
@@ -1647,6 +1794,64 @@ mod tests {
     }
 
     #[test]
+    fn yaml_front_matter_keeps_metadata_readable_without_blank_lines() {
+        let html = md_to_html(
+            "---\nname: skill-creator-lite\ndescription: Skill 创建封装工具。\n---\n# Body",
+        );
+
+        assert!(html.contains(r#"<aside class="front-matter">"#));
+        assert!(html.contains("name: skill-creator-lite"));
+        assert!(html.contains("description: Skill 创建封装工具。"));
+        assert!(html.contains("<h1 id=\"body\">Body</h1>"));
+        assert!(!html.contains("<h2"));
+    }
+
+    #[test]
+    fn yaml_front_matter_accepts_dots_and_escapes_html() {
+        let html = md_to_html("---\ntitle: <script>alert(1)</script>\n...\nParagraph");
+
+        assert!(html.contains("title: &lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(!html.contains("<script>alert(1)</script>"));
+        assert!(html.contains("<p>Paragraph</p>"));
+    }
+
+    #[test]
+    fn horizontal_rules_and_setext_headings_are_not_front_matter() {
+        let html = md_to_html("Title\n---\n\nParagraph\n\n---");
+
+        assert!(!html.contains(r#"<aside class="front-matter">"#));
+        assert!(html.contains(r#"<h2 id="title">Title</h2>"#));
+        assert!(html.contains("<hr />"));
+    }
+
+    #[test]
+    fn file_urls_only_open_existing_supported_documents() {
+        let dir = temp_test_dir("document-links");
+        let linked = dir.join("含 空格.md");
+        let unsupported = dir.join("page.html");
+        fs::write(&linked, "# Linked").unwrap();
+        fs::write(&unsupported, "<h1>Page</h1>").unwrap();
+
+        let linked_url = url::Url::from_file_path(&linked).unwrap().to_string();
+        let unsupported_url = url::Url::from_file_path(&unsupported).unwrap().to_string();
+        let missing_url = url::Url::from_file_path(dir.join("missing.md"))
+            .unwrap()
+            .to_string();
+
+        assert_eq!(
+            local_document_path_from_url(&format!("{linked_url}#section")),
+            Some(fs::canonicalize(&linked).unwrap())
+        );
+        assert_eq!(local_document_path_from_url(&unsupported_url), None);
+        assert_eq!(local_document_path_from_url(&missing_url), None);
+        assert_eq!(
+            local_document_path_from_url("https://example.com/readme.md"),
+            None
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn linux_nvidia_compat_env_only_sets_dmabuf_when_unconfigured() {
         assert_eq!(
             linux_webkit_compat_env(None, None, true),
@@ -1743,6 +1948,7 @@ mod tests {
         assert!(page.contains("body.empty .toolbar.has-update"));
         assert!(page.contains("bindAnchorNavigation"));
         assert!(page.contains("event.target.closest('#preview a[href]')"));
+        assert!(page.contains("window.ipc.postMessage('open-local-link:' + resolved)"));
         assert!(page.contains(".markdown-alert-important"));
         assert!(page.contains(".markdown-alert-title"));
         let light_alert = page.find("background: #dafbe1").unwrap();
@@ -1774,6 +1980,13 @@ mod tests {
         assert!(page.contains("window.__mdPreviewResolveExternalChange"));
         assert!(page.contains("'external-change:' + (dirty ? 'dirty' : 'clean')"));
         assert!(page.contains("(e.key === 'n' || e.key === 'N')"));
+        assert!(page.contains("id=\"doc-stats\""));
+        assert!(page.contains("updateDocumentStats"));
+        assert!(page.contains("restoreScrollProgress"));
+        assert!(page.contains("md-preview-content-zoom-v1"));
+        assert!(page.contains("id=\"btn-zoom-in\""));
+        assert!(page.contains("id=\"btn-zoom-out\""));
+        assert!(page.contains("id=\"btn-zoom-reset\""));
     }
 
     #[test]
@@ -2220,7 +2433,7 @@ fn macos_menu_controller_class() -> &'static objc2::runtime::AnyClass {
         alert.setAlertStyle(NSAlertStyle::Informational);
         alert.setMessageText(&NSString::from_str("MD Preview"));
         alert.setInformativeText(&NSString::from_str(&format!(
-            "Version {}\n\nCreate Markdown from the tab bar, edit several local documents in lightweight tabs, and rely on automatic save when switching, closing, or quitting.",
+            "Version {}\n\nFollow local document links between lightweight tabs, keep your reading position between preview and source, and inspect character counts or zoom the content without changing the app chrome.",
             env!("CARGO_PKG_VERSION")
         )));
 
@@ -2970,6 +3183,18 @@ fn is_supported_document(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn local_document_path_from_url(value: &str) -> Option<PathBuf> {
+    let url = url::Url::parse(value).ok()?;
+    if url.scheme() != "file" {
+        return None;
+    }
+    let path = url.to_file_path().ok()?;
+    if !path.is_file() || !is_supported_document(&path) {
+        return None;
+    }
+    fs::canonicalize(path).ok()
+}
+
 fn install_file_watcher(
     holder: &Arc<Mutex<Option<notify::RecommendedWatcher>>>,
     proxy: &EventLoopProxy<UserEvent>,
@@ -3438,16 +3663,22 @@ fn main() {
     };
     let mut web_context = wry::WebContext::new(data_dir);
 
+    let proxy_for_navigation = proxy.clone();
     let builder = WebViewBuilder::with_web_context(&mut web_context)
         .with_html(&initial_page)
-        .with_navigation_handler(|url: String| {
+        .with_navigation_handler(move |url: String| {
             // Let wry load the initial in-memory document; route any real URL click
-            // (http/https/mailto) to the system default handler.
+            // to the app's tab model or the system default handler.
             if url.starts_with("http://")
                 || url.starts_with("https://")
                 || url.starts_with("mailto:")
             {
                 let _ = open::that(&url);
+                false
+            } else if let Some(path) = local_document_path_from_url(&url) {
+                let _ = proxy_for_navigation.send_event(UserEvent::OpenPaths(vec![path], false));
+                false
+            } else if url.starts_with("file:") {
                 false
             } else {
                 true
@@ -3470,6 +3701,10 @@ fn main() {
                             let _ = proxy_for_ipc.send_event(UserEvent::RecentChanged);
                         }
                     }
+                }
+            } else if let Some(url) = body.strip_prefix("open-local-link:") {
+                if let Some(path) = local_document_path_from_url(url) {
+                    let _ = proxy_for_ipc.send_event(UserEvent::OpenPaths(vec![path], false));
                 }
             } else if let Some(rest) = body.strip_prefix("tab-action:") {
                 let (header, pending_content) = rest

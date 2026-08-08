@@ -394,7 +394,14 @@
       if (!link) return;
 
       var href = link.getAttribute('href') || '';
-      if (href.charAt(0) !== '#') return;
+      if (href.charAt(0) !== '#') {
+        var resolved = link.href || '';
+        if (resolved.indexOf('file:') === 0 && window.ipc && window.ipc.postMessage) {
+          event.preventDefault();
+          window.ipc.postMessage('open-local-link:' + resolved);
+        }
+        return;
+      }
 
       event.preventDefault();
 

@@ -23,7 +23,7 @@ const KATEX_CSS: &str = include_str!("../assets/katex/katex.inline.css");
 const MERMAID_JS: &str = include_str!("../assets/mermaid/mermaid.min.js");
 
 pub const PREVIEW_CSS: &str = r#"
-:root { color-scheme: light dark; }
+:root { color-scheme: light dark; --content-scale: 1; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   margin: 0; padding: 0;
@@ -31,6 +31,25 @@ body {
   color: #1a1a1a; background: #fff;
 }
 #app { max-width: 820px; margin: 0 auto; padding: 24px; }
+#preview { font-size: calc(15px * var(--content-scale)); }
+#preview .front-matter {
+  margin: 0 0 1.5em;
+  padding: .85em 0;
+  border-top: 1px solid #e1e4e8;
+  border-bottom: 1px solid #e1e4e8;
+  color: #59636e;
+}
+#preview .front-matter pre {
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  overflow: visible;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 #preview h1,#preview h2,#preview h3,#preview h4 { margin-top: 1.4em; }
 #preview h1 { border-bottom: 1px solid #e1e4e8; padding-bottom: .3em; }
 #preview h2 { border-bottom: 1px solid #e1e4e8; padding-bottom: .2em; }
@@ -98,6 +117,8 @@ pub const PREVIEW_DARK_CSS: &str = r#"
 body { color: #d4d4d4; background: #1e1e1e; }
 #preview a { color: #6cb6ff; }
 #preview h1, #preview h2 { border-color: #333; }
+#preview .front-matter { border-color: #333; color: #a9b1ba; }
+#preview .front-matter pre { background: transparent !important; }
 #preview pre { background: #2d2d2d !important; }
 #preview code:not(pre code) { background: #2d2d2d; }
 #preview blockquote { border-color: #444; color: #aaa; }
@@ -213,9 +234,46 @@ pub fn md_to_html(md: &str) -> String {
 }
 
 pub fn md_to_html_with_base(md: &str, base_dir: Option<&Path>) -> String {
-    let events = markdown_events(md);
+    let (front_matter, markdown) = split_yaml_front_matter(md)
+        .map(|(metadata, body)| (Some(metadata), body))
+        .unwrap_or((None, md));
+    let events = markdown_events(markdown);
     let events = embed_desktop_images(add_mark_highlights(add_heading_ids(events)), base_dir);
-    events_to_html(events)
+    let mut html_out = String::new();
+    if let Some(metadata) = front_matter {
+        html_out.push_str(r#"<aside class="front-matter"><pre>"#);
+        html_out.push_str(&html_escape_text(metadata.trim_end_matches(['\r', '\n'])));
+        html_out.push_str("</pre></aside>\n");
+    }
+    html_out.push_str(&events_to_html(events));
+    html_out
+}
+
+pub fn split_yaml_front_matter(md: &str) -> Option<(&str, &str)> {
+    let mut lines = md.split_inclusive('\n');
+    let first = lines.next()?;
+    if first.trim_end_matches(['\r', '\n']) != "---" {
+        return None;
+    }
+
+    let metadata_start = first.len();
+    let mut offset = metadata_start;
+    for line in lines {
+        let value = line.trim_end_matches(['\r', '\n']);
+        if value == "---" || value == "..." {
+            let metadata = &md[metadata_start..offset];
+            let body = &md[offset + line.len()..];
+            return Some((metadata, body));
+        }
+        offset += line.len();
+    }
+    None
+}
+
+pub fn html_escape_text(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 pub fn render_snapshot_markdown(

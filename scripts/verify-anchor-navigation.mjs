@@ -28,6 +28,7 @@ await page.setContent(`<!doctype html>
     <div id="preview">
       <ol>
         <li><a id="toc-link" href="#${encodedAnchor}">需求概述</a></li>
+        <li><a id="local-doc-link" href="folder/another%20doc.md#part">Another doc</a></li>
       </ol>
       <blockquote id="server-alert" class="markdown-alert-important">
         <p>Desktop alert body</p>
@@ -39,7 +40,11 @@ await page.setContent(`<!doctype html>
       <h2 id="需求概述">需求概述</h2>
       <div class="spacer"></div>
     </div>
-    <script>window.__mdPreviewFeatureFlags = { math: false, mermaid: false };</script>
+    <script>
+      window.__mdPreviewFeatureFlags = { math: false, mermaid: false };
+      window.__ipcMessages = [];
+      window.ipc = { postMessage: message => window.__ipcMessages.push(message) };
+    </script>
     <script>${enhanceJs}</script>
     <script>window.__enhancePreview();</script>
   </body>
@@ -58,8 +63,6 @@ const result = await page.evaluate(() => ({
   clientAlertBody: document.querySelector('#client-alert p:not(.markdown-alert-title)')?.textContent.trim(),
 }));
 
-await browser.close();
-
 if (result.href.startsWith('file:///tmp/md-preview-anchor-fixture/')) {
   throw new Error(`anchor click followed base href instead of staying in page: ${result.href}`);
 }
@@ -73,6 +76,21 @@ if (result.serverAlertTitle !== 'Important' ||
     result.clientAlertTitle !== 'Warning' ||
     result.clientAlertBody !== 'Client alert body') {
   throw new Error(`alert enhancement failed: ${JSON.stringify(result)}`);
+}
+
+await page.click('#local-doc-link');
+const localLinkResult = await page.evaluate(() => ({
+  href: window.location.href,
+  ipcMessages: window.__ipcMessages,
+}));
+await browser.close();
+
+if (localLinkResult.href !== result.href) {
+  throw new Error(`local document link navigated the page: ${localLinkResult.href}`);
+}
+if (localLinkResult.ipcMessages.length !== 1 ||
+    localLinkResult.ipcMessages[0] !== 'open-local-link:file:///tmp/md-preview-anchor-fixture/folder/another%20doc.md#part') {
+  throw new Error(`local document link was not routed through IPC: ${JSON.stringify(localLinkResult.ipcMessages)}`);
 }
 
 console.log('[anchor-verify] OK');

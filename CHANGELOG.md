@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.0
+
+- Added local Markdown and text document navigation: relative and absolute file links now open or activate an MD Preview tab, while missing or unsupported local targets stay on the current preview.
+- Added readable YAML front matter rendering for metadata blocks closed by `---` or `...`, without changing ordinary horizontal rules or Setext headings.
+- Added compact live document statistics for non-whitespace characters and total characters in both preview and source edit modes.
+- Added content-only zoom from 70% to 200%, with toolbar controls, `Cmd/Ctrl +`, `Cmd/Ctrl -`, `Cmd/Ctrl 0`, and persisted zoom level.
+- Preserved normalized reading progress when switching between rendered preview and source edit, including long documents whose two modes have different heights.
+- Kept web, email, in-page anchor, relative-image, autosave, search, code highlighting, KaTeX, and Mermaid behavior covered by the release verification suite.
+
 ## 1.3.0
 
 - Changed the tab-bar `+` and `Cmd/Ctrl+N` into a dedicated New Markdown flow that creates a `.md` file in the current document folder and opens it directly in source edit.
