@@ -1,0 +1,107 @@
+name: Track upstream releases
+
+# Keeps this fork's master at "newest upstream release + the Nix packaging",
+# and refuses to publish an update that does not build.
+#
+# GitHub cannot deliver an event from another repository, so this polls. The
+# schedule only ever runs the copy of this file that is on the default branch.
+
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Upstream tag to merge (blank = newest desktop release)
+        required: false
+        type: string
+
+# A second run must never race the first onto master.
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+# The repository default for GITHUB_TOKEN is read-only; this grants the write
+# needed to push the merge.
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.sync.outputs.tag }}
+      needed: ${{ steps.sync.outputs.needed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Passed through the environment rather than interpolated into the
+          # command line, so a tag string cannot become shell.
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: .github/scripts/sync-upstream.sh "$REQUESTED_TAG"
+
+      # The candidate is published to a scratch branch so that the commit which
+      # gets built is byte-for-byte the commit that gets promoted to master.
+      # On failure it is left behind on purpose, for inspection.
+      - name: Publish the merge candidate
+        if: steps.sync.outputs.needed == 'true'
+        run: git push --force origin HEAD:refs/heads/ci/upstream-sync
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.needed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both platforms the package claims in meta.platforms. ARM runners are
+        # free for public repositories.
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ci/upstream-sync
+
+      - uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Build
+        id: build
+        run: |
+          out=$(nix build .#md-preview --no-link --print-out-paths)
+          echo "out=$out" >>"$GITHUB_OUTPUT"
+          echo "Built $out"
+
+      # --help returns before any window is created, so this is a real check
+      # that the wrapper resolves its libraries, on a runner with no display.
+      - name: Smoke test the wrapper
+        run: ${{ steps.build.outputs.out }}/bin/md-preview --help
+
+  publish:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # A fast-forward: master is the merge commit's first parent. If master
+      # moved while the builds ran, this fails rather than clobbering it.
+      - name: Promote the built commit to master
+        run: |
+          git fetch origin ci/upstream-sync
+          git push origin FETCH_HEAD:refs/heads/master
+          git push origin --delete ci/upstream-sync
+
+      - name: Summary
+        run: |
+          {
+            echo "### Merged upstream \`${{ needs.prepare.outputs.tag }}\`"
+            echo
+            echo "Built on x86_64 and aarch64 before publishing."
+          } >>"$GITHUB_STEP_SUMMARY"
